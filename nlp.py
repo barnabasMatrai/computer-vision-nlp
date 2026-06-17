@@ -145,7 +145,8 @@ hyperparameter_options = {
     "hidden_size":   [64, 128],
     "num_layers":    [1, 2],
     "learning_rate": [0.001, 0.0005],
-    "batch_size":    [32, 64]
+    "batch_size":    [32, 64],
+    "dropout":       [0.2, 0.5]
 }
 
 print("Hyperparameter options defined.")
@@ -218,7 +219,7 @@ class SentimentLSTM(nn.Module):
     # 2. LSTM layer       → reads the vectors in order and remembers patterns
     # 3. Output layer     → converts the final LSTM memory into 0 or 1
 
-    def __init__(self, vocab_size, embedding_dim, hidden_size, num_layers):
+    def __init__(self, vocab_size, embedding_dim, hidden_size, num_layers, dropout):
         super(SentimentLSTM, self).__init__()
 
         # Embedding: each word index becomes a vector of size embedding_dim
@@ -231,18 +232,18 @@ class SentimentLSTM(nn.Module):
 
         # LSTM: reads the word vectors one by one and updates its memory
         # batch_first=True means input shape is (batch_size, sequence_length, embedding_dim)
-        # dropout=0.3 is applied between LSTM layers to reduce overfitting
+        # dropout is applied between LSTM layers to reduce overfitting
         self.lstm = nn.LSTM(
             input_size  = embedding_dim,
             hidden_size = hidden_size,
             num_layers  = num_layers,
             batch_first = True,
-            dropout     = 0.3 if num_layers > 1 else 0.0  # no dropout if there is only 1 layer
+            dropout     = dropout if num_layers > 1 else 0.0  # no dropout if there is only 1 layer
         )
 
         # Dropout: randomly turns off some neurons during training
         # this forces the model to not rely too much on any single neuron
-        self.dropout = nn.Dropout(0.3)
+        self.dropout = nn.Dropout(dropout)
 
         # Output layer: takes the final LSTM memory and gives one number
         self.output_layer = nn.Linear(hidden_size, 1)
@@ -360,7 +361,7 @@ def train_one_epoch(model, train_loader, criterion, optimizer, device):
 
         # Track loss and correct predictions
         total_loss    = total_loss + loss.item()
-        predicted_labels = (torch.sigmoid(predictions) >= 0.5).float()
+        predicted_labels = (predictions >= 0.0).float()
         correct       = correct + (predicted_labels == batch_labels).sum().item()
         total_samples = total_samples + len(batch_labels)
 
@@ -391,7 +392,7 @@ def evaluate_model(model, test_loader, criterion, device):
             loss        = criterion(predictions, batch_labels)
 
             total_loss       = total_loss + loss.item()
-            predicted_labels = (torch.sigmoid(predictions) >= 0.5).float()
+            predicted_labels = (predictions >= 0.0).float()
             correct          = correct + (predicted_labels == batch_labels).sum().item()
             total_samples    = total_samples + len(batch_labels)
 
@@ -403,8 +404,17 @@ def evaluate_model(model, test_loader, criterion, device):
 
 def run_training(model, train_loader, test_loader, criterion, optimizer, device):
 
-    NUM_EPOCHS = 10
-    PATIENCE   = 3   # stop if no improvement for 3 epochs in a row
+    NUM_EPOCHS = 50     # large number, early stopping will handle when to stop
+    PATIENCE   = 3      # stop if no improvement for 3 epochs in a row
+    MIN_DELTA  = 0.001  # minimum improvement to count as "getting better"
+
+    # Scheduler reduces learning rate when validation loss stops improving
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode    = "min",  # we want loss to go DOWN
+        factor  = 0.5,    # cut learning rate in half when plateau is detected
+        patience= 2       # wait 2 epochs before reducing
+    )
 
     best_val_accuracy          = 0.0
     epochs_without_improvement = 0
@@ -429,8 +439,13 @@ def run_training(model, train_loader, test_loader, criterion, optimizer, device)
             " Val Acc:",      round(val_accuracy * 100, 2), "%"
         )
 
+        # Tell the scheduler what the validation loss was this epoch
+        # if it does not improve for 2 epochs, learning rate will be cut in half
+        scheduler.step(val_loss)
+
         # Early stopping check
-        if val_accuracy > best_val_accuracy:
+        # we only count it as improvement if accuracy went up by at least MIN_DELTA
+        if val_accuracy > best_val_accuracy + MIN_DELTA:
             best_val_accuracy          = val_accuracy
             epochs_without_improvement = 0
             # Save the best model weights so we can restore them later
@@ -469,6 +484,7 @@ for combination in selected_combinations:
     num_layers    = combination["num_layers"]
     learning_rate = combination["learning_rate"]
     batch_size    = combination["batch_size"]
+    dropout       = combination["dropout"]
 
     print("------------------------------------------------------------")
     print("Combination", combination_number + 1, "/", NUM_RANDOM_COMBINATIONS)
@@ -479,6 +495,7 @@ for combination in selected_combinations:
     print("  num_layers:   ", num_layers)
     print("  learning_rate:", learning_rate)
     print("  batch_size:   ", batch_size)
+    print("  dropout:      ", dropout)
     print()
 
     # Step 1: build vocabulary
@@ -500,7 +517,8 @@ for combination in selected_combinations:
         vocab_size    = vocab_size,
         embedding_dim = embedding_dim,
         hidden_size   = hidden_size,
-        num_layers    = num_layers
+        num_layers    = num_layers,
+        dropout       = dropout
     )
     model = model.to(device)
 
