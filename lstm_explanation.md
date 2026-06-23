@@ -51,17 +51,14 @@ After all 5 combinations finished training we compared their best test accuracie
 One thing we had to be careful about: in an earlier version of the code, every combination was saving its best weights to the same file. This meant the file always ended up with the last combination's weights, not the best combination's weights. We fixed this by tracking a global best accuracy across all combinations and only updating the saved weights when a new overall best was reached.
 
 
-Results
+Things We Could Have Done Differently
 
-The best combination achieved around 88 to 90 percent test accuracy depending on the run. The exact result can vary slightly because random search picks combinations randomly and neural network training has some randomness too.
+For the embeddings, we trained our own word vectors from scratch. A common alternative is to use pretrained embeddings like GloVe or Word2Vec, which were already trained on billions of words and know that words like "good" and "great" are similar. We did not use them because we wanted to keep everything self-contained and train purely on the IMDB data.
 
-The confusion matrices and model comparison charts are saved as image files:
-- confusion_matrix_comparison.png shows the confusion matrices for both models side by side
-- model_comparison.png shows a bar chart comparing the test accuracies of Naive Bayes and LSTM
+For the architecture, we only used the final hidden state of the LSTM as the summary of the review. A Bidirectional LSTM would read the text both forward and backward and combine both results. This can help because some words get more context from what comes after them. We left it out to keep the model simpler and training faster.
 
+We also could have added an attention mechanism. Instead of just using the last hidden state, attention lets the model look back at all the hidden states and decide which words mattered most for the prediction. This usually improves results but makes the code more complex, so we did not include it.
 
-How to Run
+For hyperparameter tuning, Bayesian optimization would have been smarter than random search because it learns from previous results and focuses on more promising areas. We used random search because it is much simpler to implement and still works well enough for a small number of combinations.
 
-python nlp.py
-
-This runs everything from start to finish: preprocessing, Naive Bayes training and evaluation, LSTM training and evaluation, and the comparison plots. The output files are saved in the same folder.
+Another option instead of LSTM was GRU (Gated Recurrent Unit). GRU is similar to LSTM but has fewer parameters and trains faster. In practice GRU and LSTM often give similar results on text classification tasks. We chose LSTM because it is the more commonly used and well-known architecture.
