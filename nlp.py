@@ -14,6 +14,33 @@ nltk.download('omw-1.4')
 # Load dataset
 df = pd.read_csv("IMDB Dataset.csv")
 
+# Data Analysis
+
+print("DATA ANALYSIS")
+
+# Basic size and structure
+print("Number of reviews (rows):", len(df))
+print("Columns:", list(df.columns))
+
+print("Missing values per column:", df.isna().sum().to_dict())
+
+num_duplicates = df["review"].duplicated().sum()
+print("Duplicate reviews:", num_duplicates)
+
+
+# Class distribution
+print("Class distribution (count):")
+print(df["sentiment"].value_counts())
+
+# Review length in words
+review_word_counts = df["review"].str.split().apply(len)
+print("Review length in words:")
+print("   min:   ", review_word_counts.min())
+print("   median:", int(review_word_counts.median()))
+print("   mean:  ", round(review_word_counts.mean(), 1))
+print("   max:   ", review_word_counts.max())
+
+
 # Initialize tools
 lemmatizer = WordNetLemmatizer()
 
@@ -83,6 +110,10 @@ def preprocess_text(text):
 
     return " ".join(words)
 
+# Remove duplicate reviews 
+df = df.drop_duplicates(subset="review").reset_index(drop=True)
+print("Reviews after removing duplicates:", len(df))
+
 # Apply preprocessing
 #df["clean_review"] = df["review"].apply(preprocess_text)
 df["review"] = df["review"].apply(preprocess_text)
@@ -92,10 +123,6 @@ df["label"] = df["sentiment"].map({
     "negative": 0,
     "positive": 1
 })
-
-#print(df[["review", "clean_review", "sentiment", "label"]].head())
-print(df[["review", "sentiment", "label"]].head())
-
 # save cleaned dataset
 df.to_csv("IMDB_Cleaned.csv", index=False)
 
@@ -167,16 +194,18 @@ for vocab_size in hyperparameter_options["vocab_size"]:
                 for num_layers in hyperparameter_options["num_layers"]:
                     for learning_rate in hyperparameter_options["learning_rate"]:
                         for batch_size in hyperparameter_options["batch_size"]:
-                            combination = {
-                                "vocab_size":    vocab_size,
-                                "max_length":    max_length,
-                                "embedding_dim": embedding_dim,
-                                "hidden_size":   hidden_size,
-                                "num_layers":    num_layers,
-                                "learning_rate": learning_rate,
-                                "batch_size":    batch_size
-                            }
-                            all_combinations.append(combination)
+                            for dropout in hyperparameter_options["dropout"]:
+                                combination = {
+                                    "vocab_size": vocab_size,
+                                    "max_length": max_length,
+                                    "embedding_dim": embedding_dim,
+                                    "hidden_size": hidden_size,
+                                    "num_layers": num_layers,
+                                    "learning_rate": learning_rate,
+                                    "batch_size": batch_size,
+                                    "dropout": dropout
+                                }
+                                all_combinations.append(combination)
 
 # Randomly pick 5 combinations to try
 random.seed(42)
@@ -461,7 +490,12 @@ def run_training(model, train_loader, test_loader, criterion, optimizer, device)
 
 # ---- Main Hyperparameter Tuning Loop ----
 
-device       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+else:
+    device = torch.device("cpu")
 y_train_list = y_train.tolist()
 y_test_list  = y_test.tolist()
 
@@ -471,7 +505,7 @@ print("Using device:", device)
 print("Starting hyperparameter tuning...")
 print()
 
-combination_number = 0
+combination_number = 1
 
 for combination in selected_combinations:
 
@@ -487,7 +521,7 @@ for combination in selected_combinations:
     dropout       = combination["dropout"]
 
     print("------------------------------------------------------------")
-    print("Combination", combination_number + 1, "/", NUM_RANDOM_COMBINATIONS)
+    print("Combination", combination_number, "/", NUM_RANDOM_COMBINATIONS)
     print("  vocab_size:   ", vocab_size)
     print("  max_length:   ", max_length)
     print("  embedding_dim:", embedding_dim)
