@@ -269,7 +269,7 @@ plt.savefig("top_features_nb.png", dpi=150)
 print("Saved: top_features_nb.png")
 plt.show()
 
-print("\nDone.")
+print("\nNaive Bayes finished.")
 
 
 # =======================================================
@@ -289,27 +289,26 @@ from collections import Counter
 
 # ---- Define hyperparameters to try ----
 
-# Each key holds a list of values we want to test.
-# At the end we will loop over all combinations and compare results.
+# we list the values we want to try for each parameter
+# later we will combine them and test different settings
 
-# Learning rate is fixed because ReduceLROnPlateau scheduler already handles decay automatically.
+# we keep the learning rate fixed here because the scheduler will adjust it during training
 LEARNING_RATE = 0.001
 
 hyperparameter_options = {
-    "vocab_size":    [10000, 20000],
-    "max_length":    [100, 200],
+    "vocab_size": [10000, 20000],
+    "max_length": [100, 200],
     "embedding_dim": [64, 128],
-    "hidden_size":   [64, 128],
-    "num_layers":    [1, 2],
-    "batch_size":    [32, 64],
-    "dropout":       [0.2, 0.5]
+    "hidden_size": [64, 128],
+    "num_layers": [1, 2],
+    "batch_size": [32, 64],
+    "dropout": [0.2, 0.5]
 }
 
-print("Hyperparameter options defined.")
+print("Starting LSTM training...")
 
-# We use random search instead of grid search.
-# Grid search tries every single combination — that would be hundreds of full model trainings.
-# Random search picks a small random subset of combinations instead.
+# grid search would try all 128 combinations and take hours, so we use random search instead
+# we just pick 5 random combinations and train only those
 
 NUM_RANDOM_COMBINATIONS = 5
 
@@ -323,17 +322,17 @@ for vocab_size in hyperparameter_options["vocab_size"]:
                     for batch_size in hyperparameter_options["batch_size"]:
                         for dropout in hyperparameter_options["dropout"]:
                             combination = {
-                                "vocab_size":    vocab_size,
-                                "max_length":    max_length,
+                                "vocab_size": vocab_size,
+                                "max_length": max_length,
                                 "embedding_dim": embedding_dim,
-                                "hidden_size":   hidden_size,
-                                "num_layers":    num_layers,
-                                "batch_size":    batch_size,
-                                "dropout":       dropout
+                                "hidden_size": hidden_size,
+                                "num_layers": num_layers,
+                                "batch_size": batch_size,
+                                "dropout": dropout
                             }
                             all_combinations.append(combination)
 
-# Randomly pick 5 combinations to try
+# seed(42) makes the random selection reproducible — we get the same 5 combinations every run
 random.seed(42)
 selected_combinations = random.sample(all_combinations, NUM_RANDOM_COMBINATIONS)
 print("Total possible combinations:", len(all_combinations))
@@ -343,74 +342,77 @@ print("Combinations we will try:", NUM_RANDOM_COMBINATIONS)
 # ---- Create PyTorch Dataset ----
 
 class SentimentDataset(Dataset):
-    # PyTorch needs data in a special Dataset format to load it in batches.
-    # We create our own Dataset class by extending PyTorch's Dataset class.
+    # PyTorch can't work with plain Python lists, it needs a Dataset object
+    # so we create our own by extending PyTorch's built-in Dataset class
 
     def __init__(self, sequences, labels):
-        # Convert Python lists to PyTorch tensors
-        # torch.long = integer numbers (for word indexes)
-        # torch.float32 = decimal numbers (for labels 0 and 1)
+        # we convert lists to tensors here
+        # sequences use long (integers) because they are word indexes
+        # labels use float32 because BCEWithLogitsLoss expects decimal numbers
         self.sequences = torch.tensor(sequences, dtype=torch.long)
-        self.labels    = torch.tensor(labels,    dtype=torch.float32)
+        self.labels = torch.tensor(labels, dtype=torch.float32)
 
     def __len__(self):
-        # Returns how many reviews are in this dataset
+        # PyTorch calls this to know how many examples we have
         return len(self.labels)
 
     def __getitem__(self, index):
-        # Returns one review and its label at the given position
+        # PyTorch calls this to get one review and its label by position
         one_sequence = self.sequences[index]
-        one_label    = self.labels[index]
+        one_label = self.labels[index]
         return one_sequence, one_label
 
 
 # ---- LSTM Model ----
 
 class SentimentLSTM(nn.Module):
-    # Our model has 3 main parts:
-    # 1. Embedding layer  -> turns word indexes into meaningful vectors
-    # 2. LSTM layer       -> reads the vectors in order and remembers patterns
-    # 3. Output layer     -> converts the final LSTM memory into 0 or 1
+    # our model has 3 parts:
+    # 1. embedding layer -> each word index becomes a small vector of numbers
+    # 2. LSTM layer -> reads the vectors one by one and keeps a memory
+    # 3. output layer -> turns the final memory into a single number (positive or negative)
 
     def __init__(self, vocab_size, embedding_dim, hidden_size, num_layers, dropout):
         super(SentimentLSTM, self).__init__()
 
         self.hidden_size = hidden_size
 
-        # Embedding: each word index becomes a vector of size embedding_dim
-        # padding_idx=0 means the <PAD> token always gives a zero vector (no information)
+        # each word index is converted to a vector of size embedding_dim
+        # padding_idx=0 means the PAD token always gives a zero vector so it doesn't affect learning
         self.embedding = nn.Embedding(
-            num_embeddings = vocab_size,
-            embedding_dim  = embedding_dim,
-            padding_idx    = 0
+            num_embeddings=vocab_size,
+            embedding_dim=embedding_dim,
+            padding_idx=0
         )
 
-        # LSTM: reads the word vectors one by one and updates its memory
-        # batch_first=True means input shape is (batch_size, sequence_length, embedding_dim)
-        # dropout is applied between LSTM layers to reduce overfitting
+        # the LSTM reads word vectors in order and updates its memory at each step
+        # batch_first=True just means the input shape is (batch, sequence, features) which is more intuitive
+        # dropout between layers helps reduce overfitting, but it only works if there are at least 2 layers
+        # if we have 1 layer there is nothing between layers, so dropout does nothing and PyTorch warns us
         self.lstm = nn.LSTM(
-            input_size  = embedding_dim,
-            hidden_size = hidden_size,
-            num_layers  = num_layers,
-            batch_first = True,
-            dropout     = dropout if num_layers > 1 else 0.0  # no dropout if there is only 1 layer
+            input_size=embedding_dim,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0.0
         )
 
-        # Setting forget gate bias to 1 so the model remembers more by default at the start.
-        # Without this, the model tends to forget too aggressively in early training.
+        # by default LSTMs forget too much at the start of training, before they learn anything useful
+        # setting the forget gate bias to 1 makes it remember more from the beginning
+        # this makes training more stable especially in the early epochs
         self._init_forget_gate_bias(num_layers)
 
-        # Dropout: randomly turns off some neurons during training
-        # this forces the model to not rely too much on any single neuron
+        # dropout randomly switches off some neurons during training
+        # it stops the model from depending too much on specific neurons
         self.dropout = nn.Dropout(dropout)
 
-        # Output layer: takes the final LSTM memory and gives one number
+        # the output layer takes the final LSTM memory and produces one number
+        # if it's >= 0 we say positive, if it's < 0 we say negative
         self.output_layer = nn.Linear(hidden_size, 1)
 
     def _init_forget_gate_bias(self, num_layers):
-        # In PyTorch LSTM, each bias tensor has 4 * hidden_size values.
-        # The order of gates is: input (i), forget (f), cell (g), output (o).
-        # Forget gate is at positions [hidden_size : 2 * hidden_size].
+        # PyTorch packs all 4 gate biases into one tensor in this order: input, forget, cell, output
+        # so the forget gate is always at positions [hidden_size : 2 * hidden_size]
+        # we loop over all layers because each layer has its own set of biases
         for layer_idx in range(num_layers):
             for bias_name in [f"bias_ih_l{layer_idx}", f"bias_hh_l{layer_idx}"]:
                 bias = getattr(self.lstm, bias_name)
@@ -418,20 +420,20 @@ class SentimentLSTM(nn.Module):
 
     def forward(self, x):
 
-        # Step 1: convert word indexes to word vectors
+        # first we turn word indexes into vectors
         embedded = self.embedding(x)
 
-        # Step 2: pass word vectors through the LSTM
-        # lstm_output and cell are not used, we only need the final hidden state
+        # we pass the vectors through the LSTM, it reads them one by one
+        # we only care about the final hidden state, not the outputs at each step
         lstm_output, (hidden, cell) = self.lstm(embedded)
 
-        # Step 3: take only the last layer's final hidden state
+        # hidden has shape (num_layers, batch, hidden_size), we take the last layer
         last_hidden = hidden[-1]
 
-        # Step 4: apply dropout
+        # apply dropout before the final prediction
         last_hidden = self.dropout(last_hidden)
 
-        # Step 5: pass through output layer and remove extra dimension
+        # the output layer gives one number per review, squeeze removes the extra empty dimension
         output = self.output_layer(last_hidden)
         output = output.squeeze(1)
 
@@ -442,16 +444,18 @@ class SentimentLSTM(nn.Module):
 
 def build_vocabulary(X_train, vocab_size):
 
-    # Count how many times each word appears in training reviews
+    # we count how many times each word appears across all training reviews
     word_counts = Counter()
     for review in X_train:
         words = review.split()
         word_counts.update(words)
 
+    # we take vocab_size - 2 because index 0 and 1 are already taken
+    # index 0 = <PAD>, index 1 = <UNK>, so real words start from index 2
     most_common_words = word_counts.most_common(vocab_size - 2)
 
-    # Create word -> number dictionary
-    # <PAD> = 0, <UNK> = 1, then all other words start from 2
+    # we build a dictionary that maps each word to a number
+    # <PAD> and <UNK> are added first, then all the real words follow
     word_to_index = {"<PAD>": 0, "<UNK>": 1}
     for idx, (word, count) in enumerate(most_common_words, start=2):
         word_to_index[word] = idx
@@ -463,23 +467,28 @@ def convert_to_sequences(X_data, word_to_index, max_length):
     all_sequences = []
 
     for review in X_data:
-        words    = review.split()
+        words = review.split()
         sequence = []
 
-        # Replace each word with its number from the vocabulary
+        # we replace each word with its index number
+        # if the word is not in the vocabulary we use 1 which is <UNK>
         for word in words:
             if word in word_to_index:
                 sequence.append(word_to_index[word])
             else:
-                sequence.append(1)  # 1 = <UNK>, word not in vocabulary
+                sequence.append(1)
 
-        # If the review is too long, cut it from the end
+        # if the review is too long we keep the end, not the beginning
+        # the conclusion and final opinion are usually at the end
         if len(sequence) > max_length:
-            sequence = sequence[:max_length]
+            sequence = sequence[len(sequence) - max_length:]
 
-        # If the review is too short, add zeros at the beginning
+        # we add PAD at the BEGINNING, not the end
+        # the LSTM reads left to right and predicts from the last position
+        # so we want the real words to be at the end, not buried under PAD tokens
+        # example with max_length=5: "great film" -> [0, 0, 0, great_idx, film_idx]
         while len(sequence) < max_length:
-            sequence = [0] + sequence  # 0 = <PAD>
+            sequence = [0] + sequence
 
         all_sequences.append(sequence)
 
@@ -488,54 +497,55 @@ def convert_to_sequences(X_data, word_to_index, max_length):
 
 def create_dataloaders(X_train_sequences, X_test_sequences, y_train_list, y_test_list, batch_size):
 
-    # Create Dataset objects
     train_dataset = SentimentDataset(X_train_sequences, y_train_list)
-    test_dataset  = SentimentDataset(X_test_sequences,  y_test_list)
+    test_dataset = SentimentDataset(X_test_sequences, y_test_list)
 
-    # Create DataLoader objects
-    # shuffle=True for training so the model doesn't memorize the order
-    # shuffle=False for testing so results are consistent
+    # shuffle=True for training so the model doesn't see reviews in the same order every epoch
+    # shuffle=False for testing so we always get the same consistent results
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_loader  = DataLoader(test_dataset,  batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     return train_loader, test_loader
 
 def train_one_epoch(model, train_loader, criterion, optimizer, device):
 
-    # Tell PyTorch we are in training mode (activates dropout)
+    # training mode activates dropout, which is only used during training
     model.train()
 
-    total_loss      = 0
-    correct         = 0
-    total_samples   = 0
+    total_loss = 0
+    correct = 0
+    total_samples = 0
 
     for batch_sequences, batch_labels in train_loader:
 
-        # Move data to the same device as the model (GPU or CPU)
+        # data and model must be on the same device (GPU or CPU)
         batch_sequences = batch_sequences.to(device)
-        batch_labels    = batch_labels.to(device)
+        batch_labels = batch_labels.to(device)
 
-        # Forward pass: calculate predictions
+        # forward pass: run the batch through the model to get predictions
         predictions = model(batch_sequences)
 
-        # Calculate how wrong the predictions are
+        # calculate how wrong our predictions are
         loss = criterion(predictions, batch_labels)
 
-        # Backward pass: update model weights
-        optimizer.zero_grad() # clear old gradients
-        loss.backward() # calculate new gradients
+        # clear old gradients first, PyTorch adds on top of them by default
+        optimizer.zero_grad()
 
-        # Gradient clipping: if gradients get too large, scale them down.
-        # This prevents sudden large jumps in weights that can break training.
+        # calculate new gradients by going backward through the network
+        loss.backward()
+
+        # gradient clipping: if gradients get too large they can break training
+        # this is called the exploding gradient problem, so we cap them at 1.0
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-        optimizer.step()       # update weights
+        # update the model weights using the gradients we just calculated
+        optimizer.step()
 
         # Track loss and correct predictions
-        total_loss       = total_loss + loss.item()
+        total_loss = total_loss + loss.item()
         predicted_labels = (predictions >= 0.0).float()
-        correct          = correct + (predicted_labels == batch_labels).sum().item()
-        total_samples    = total_samples + len(batch_labels)
+        correct = correct + (predicted_labels == batch_labels).sum().item()
+        total_samples = total_samples + len(batch_labels)
 
     avg_loss = total_loss / len(train_loader)
     accuracy = correct / total_samples
@@ -544,29 +554,29 @@ def train_one_epoch(model, train_loader, criterion, optimizer, device):
 
 def evaluate_model(model, test_loader, criterion, device):
 
-    # Tell PyTorch we are in evaluation mode (deactivates dropout)
+    # evaluation mode turns off dropout so every neuron is active during testing
     model.eval()
 
-    total_loss    = 0
-    correct       = 0
+    total_loss = 0
+    correct = 0
     total_samples = 0
 
-    # torch.no_grad() means we don't calculate gradients
-    # we don't need them during evaluation, so this saves memory and time
+    # we don't need gradients during evaluation, we're not updating any weights
+    # no_grad skips all the gradient calculations so it's faster and uses less memory
     with torch.no_grad():
 
         for batch_sequences, batch_labels in test_loader:
 
             batch_sequences = batch_sequences.to(device)
-            batch_labels    = batch_labels.to(device)
+            batch_labels = batch_labels.to(device)
 
             predictions = model(batch_sequences)
-            loss        = criterion(predictions, batch_labels)
+            loss = criterion(predictions, batch_labels)
 
-            total_loss       = total_loss + loss.item()
+            total_loss = total_loss + loss.item()
             predicted_labels = (predictions >= 0.0).float()
-            correct          = correct + (predicted_labels == batch_labels).sum().item()
-            total_samples    = total_samples + len(batch_labels)
+            correct = correct + (predicted_labels == batch_labels).sum().item()
+            total_samples = total_samples + len(batch_labels)
 
     avg_loss = total_loss / len(test_loader)
     accuracy = correct / total_samples
@@ -576,34 +586,31 @@ def evaluate_model(model, test_loader, criterion, device):
 
 def run_training(model, train_loader, test_loader, criterion, optimizer, device):
 
-    NUM_EPOCHS = 50     # large number, early stopping will handle when to stop
-    PATIENCE   = 3      # stop if no improvement for 3 epochs in a row
-    MIN_DELTA  = 0.001  # minimum improvement to count as "getting better"
+    NUM_EPOCHS = 50     # we allow up to 50 epochs but early stopping usually stops us before that
+    PATIENCE   = 3      # if accuracy doesn't improve for 3 epochs in a row we stop
+    MIN_DELTA  = 0.001  # we only count it as improvement if accuracy goes up by at least 0.1%
 
-    # Scheduler reduces learning rate when validation loss stops improving
+    # instead of keeping the same learning rate the whole time, we let the scheduler shrink it
+    # if the test loss doesn't go down for 2 epochs, it cuts the learning rate in half
+    # so it goes: 0.001 -> 0.0005 -> 0.00025 and so on
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
-        mode    = "min",  # we want loss to go DOWN
-        factor  = 0.5,    # cut learning rate in half when plateau is detected
-        patience= 2       # wait 2 epochs before reducing
+        mode="min",
+        factor=0.5,
+        patience=2
     )
 
-    best_test_accuracy          = 0.0
-    best_state_dict            = None
+    best_test_accuracy = 0.0
+    best_state_dict = None
     epochs_without_improvement = 0
 
     for epoch in range(NUM_EPOCHS):
-
-        # Train for one epoch
         train_loss, train_accuracy = train_one_epoch(
             model, train_loader, criterion, optimizer, device
         )
-
-        # Evaluate on test set
         test_loss, test_accuracy = evaluate_model(
             model, test_loader, criterion, device
         )
-
         print(
             "  Epoch", epoch + 1, "/", NUM_EPOCHS,
             " | Train Loss:", round(train_loss, 4),
@@ -611,18 +618,17 @@ def run_training(model, train_loader, test_loader, criterion, optimizer, device)
             " | Test Loss:",  round(test_loss, 4),
             " Test Acc:",     round(test_accuracy * 100, 2), "%"
         )
-
-        # Tell the scheduler what the validation loss was this epoch
-        # if it does not improve for 2 epochs, learning rate will be cut in half
+        # we give the scheduler the test loss, not train loss
+        # we care about performance on new data, not on the data the model already saw
         scheduler.step(test_loss)
-
-        # Early stopping check
-        # we only count it as improvement if accuracy went up by at least MIN_DELTA
+        # we only count it as real improvement if accuracy went up by at least 0.1%
+        # small random changes between epochs don't count
         if test_accuracy > best_test_accuracy + MIN_DELTA:
-            best_test_accuracy          = test_accuracy
+            best_test_accuracy = test_accuracy
             epochs_without_improvement = 0
-            # Keep the best epoch's weights in memory instead of saving to a file
-            best_state_dict            = copy.deepcopy(model.state_dict())
+            # we use deepcopy to save a snapshot of the weights right now
+            # without it, state_dict is just a reference and it would keep changing as training continues
+            best_state_dict = copy.deepcopy(model.state_dict())
         else:
             epochs_without_improvement = epochs_without_improvement + 1
             if epochs_without_improvement >= PATIENCE:
@@ -634,12 +640,12 @@ def run_training(model, train_loader, test_loader, criterion, optimizer, device)
 
 # ---- Main Hyperparameter Tuning Loop ----
 
-device       = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 y_train_list = y_train.tolist()
-y_test_list  = y_test.tolist()
+y_test_list = y_test.tolist()
 
-all_tuning_results   = []
-global_best_accuracy  = 0.0
+all_tuning_results = []
+global_best_accuracy = 0.0
 global_best_state_dict = None
 
 print("Using device:", device)
@@ -652,16 +658,16 @@ for combination in selected_combinations:
 
     combination_number = combination_number + 1
 
-    vocab_size    = combination["vocab_size"]
-    max_length    = combination["max_length"]
+    vocab_size = combination["vocab_size"]
+    max_length = combination["max_length"]
     embedding_dim = combination["embedding_dim"]
-    hidden_size   = combination["hidden_size"]
-    num_layers    = combination["num_layers"]
-    batch_size    = combination["batch_size"]
-    dropout       = combination["dropout"]
+    hidden_size = combination["hidden_size"]
+    num_layers = combination["num_layers"]
+    batch_size = combination["batch_size"]
+    dropout = combination["dropout"]
 
     print("------------------------------------------------------------")
-    print("Combination", combination_number, "/", NUM_RANDOM_COMBINATIONS)
+    print("Combination     ", combination_number, "/", NUM_RANDOM_COMBINATIONS)
     print("  vocab_size:   ", vocab_size)
     print("  max_length:   ", max_length)
     print("  embedding_dim:", embedding_dim)
@@ -677,7 +683,7 @@ for combination in selected_combinations:
 
     # Step 2: convert reviews to sequences
     X_train_sequences = convert_to_sequences(X_train, word_to_index, max_length)
-    X_test_sequences  = convert_to_sequences(X_test,  word_to_index, max_length)
+    X_test_sequences = convert_to_sequences(X_test, word_to_index, max_length)
 
     # Step 3: create dataloaders
     train_loader, test_loader = create_dataloaders(
@@ -688,16 +694,21 @@ for combination in selected_combinations:
 
     # Step 4: create model
     model = SentimentLSTM(
-        vocab_size    = vocab_size,
-        embedding_dim = embedding_dim,
-        hidden_size   = hidden_size,
-        num_layers    = num_layers,
-        dropout       = dropout
+        vocab_size=vocab_size,
+        embedding_dim=embedding_dim,
+        hidden_size=hidden_size,
+        num_layers=num_layers,
+        dropout=dropout
     )
     model = model.to(device)
 
-    # Step 5: set up loss function and optimizer
+    # BCEWithLogitsLoss works for binary classification (positive or negative)
+    # it applies sigmoid and cross-entropy loss together in one step
+    # doing them separately can cause numerical problems, so this is the safer way
     criterion = nn.BCEWithLogitsLoss()
+
+    # Adam is a standard optimizer that works well for most neural networks
+    # it adjusts the learning rate for each weight separately, which makes it faster to converge
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     # Step 6: train the model
@@ -708,7 +719,7 @@ for combination in selected_combinations:
     # Save result
     result = {
         "combination": combination,
-        "accuracy":    round(best_accuracy * 100, 2)
+        "accuracy": round(best_accuracy * 100, 2)
     }
     all_tuning_results.append(result)
 
@@ -716,12 +727,10 @@ for combination in selected_combinations:
 
     # If this combination is the best so far, keep its weights in memory
     if best_accuracy > global_best_accuracy:
-        global_best_accuracy   = best_accuracy
+        global_best_accuracy = best_accuracy
         global_best_state_dict = state_dict
 
-
 # ---- Find and print the best result ----
-
 best_lstm_result = all_tuning_results[0]
 for result in all_tuning_results:
     if result["accuracy"] > best_lstm_result["accuracy"]:
@@ -745,7 +754,6 @@ print()
 print("Best LSTM accuracy:", best_lstm_result["accuracy"], "%")
 print("------------------------------------------------------------")
 
-
 # -------------------------------------------------------
 # LSTM Confusion Matrix
 # -------------------------------------------------------
@@ -755,20 +763,20 @@ best_combo = best_lstm_result["combination"]
 
 # We need to rebuild the vocabulary and sequences using the best hyperparameters
 # because each combination used different vocab_size and max_length
-best_word_to_index    = build_vocabulary(X_train, best_combo["vocab_size"])
+best_word_to_index = build_vocabulary(X_train, best_combo["vocab_size"])
 best_X_test_sequences = convert_to_sequences(X_test, best_word_to_index, best_combo["max_length"])
 
 # Create DataLoader only for the test set — we are not training, just evaluating
 best_test_dataset = SentimentDataset(best_X_test_sequences, y_test_list)
-best_test_loader  = DataLoader(best_test_dataset, batch_size=best_combo["batch_size"], shuffle=False)
+best_test_loader = DataLoader(best_test_dataset, batch_size=best_combo["batch_size"], shuffle=False)
 
 # Rebuild the best model and load the best weights from memory
 best_lstm_model = SentimentLSTM(
-    vocab_size    = best_combo["vocab_size"],
-    embedding_dim = best_combo["embedding_dim"],
-    hidden_size   = best_combo["hidden_size"],
-    num_layers    = best_combo["num_layers"],
-    dropout       = best_combo["dropout"]
+    vocab_size=best_combo["vocab_size"],
+    embedding_dim=best_combo["embedding_dim"],
+    hidden_size=best_combo["hidden_size"],
+    num_layers=best_combo["num_layers"],
+    dropout=best_combo["dropout"]
 )
 best_lstm_model.load_state_dict(global_best_state_dict)
 best_lstm_model = best_lstm_model.to(device)
@@ -777,17 +785,17 @@ best_lstm_model = best_lstm_model.to(device)
 best_lstm_model.eval()
 
 # Go through the test set and collect predictions
-lstm_all_preds  = []
+lstm_all_preds = []
 lstm_all_labels = []
 
 with torch.no_grad():
     for batch_sequences, batch_labels in best_test_loader:
 
         batch_sequences = batch_sequences.to(device)
-        batch_labels    = batch_labels.to(device)
+        batch_labels = batch_labels.to(device)
 
-        predictions      = best_lstm_model(batch_sequences)
-        # If prediction is >= 0 we say positive (1), otherwise negative (0)
+        predictions = best_lstm_model(batch_sequences)
+        # >= 0 means positive, < 0 means negative
         predicted_labels = (predictions >= 0.0).float()
 
         lstm_all_preds.extend(predicted_labels.cpu().tolist())
@@ -795,18 +803,11 @@ with torch.no_grad():
 
 # Calculate accuracy and confusion matrix for LSTM
 lstm_accuracy = accuracy_score(lstm_all_labels, lstm_all_preds)
-lstm_cm       = confusion_matrix(lstm_all_labels, lstm_all_preds)
+lstm_cm = confusion_matrix(lstm_all_labels, lstm_all_preds)
 
 print("LSTM Test Accuracy:", round(lstm_accuracy * 100, 2), "%")
 
-
-# =======================================================
-# MODEL COMPARISON
-# =======================================================
-
-# -------------------------------------------------------
-# Side-by-side Confusion Matrices
-# -------------------------------------------------------
+# ---- MODEL COMPARISON PART ----
 
 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
@@ -825,7 +826,7 @@ axes[0].set_xlabel("Predicted label")
 axes[0].set_ylabel("True label")
 axes[0].set_title(f"Naive Bayes\nAccuracy: {accuracy:.4f}")
 
-# Right plot: LSTM
+# right plot: LSTM
 sns.heatmap(
     lstm_cm,
     annot=True,
@@ -850,8 +851,7 @@ plt.show()
 # -------------------------------------------------------
 # Accuracy Bar Chart
 # -------------------------------------------------------
-
-model_names      = ["Naive Bayes", "LSTM"]
+model_names = ["Naive Bayes", "LSTM"]
 model_accuracies = [accuracy * 100, lstm_accuracy * 100]
 
 plt.figure(figsize=(6, 5))
