@@ -434,7 +434,7 @@ class SentimentLSTM(nn.Module):
         # apply dropout before the final prediction
         last_hidden = self.dropout(last_hidden)
 
-        # the output layer gives one number per review, squeeze removes the extra empty dimension
+        # the output layer takes the ltms's final memory vector and compresses it into one number per review
         output = self.output_layer(last_hidden)
         output = torch.sigmoid(output)
         output = output.squeeze(1)
@@ -442,7 +442,7 @@ class SentimentLSTM(nn.Module):
         return output
 
 
-# ---- Helper functions for the tuning loop ----
+# ---- Helper functions for the hyperparameter tuning loop ----
 
 def build_vocabulary(X_train, vocab_size):
 
