@@ -22,6 +22,33 @@ nltk.download('omw-1.4')
 # Load dataset
 df = pd.read_csv("IMDB Dataset.csv")
 
+# Data Analysis
+
+print("DATA ANALYSIS")
+
+# Basic size and structure
+print("Number of reviews (rows):", len(df))
+print("Columns:", list(df.columns))
+
+print("Missing values per column:", df.isna().sum().to_dict())
+
+num_duplicates = df["review"].duplicated().sum()
+print("Duplicate reviews:", num_duplicates)
+
+
+# Class distribution
+print("Class distribution (count):")
+print(df["sentiment"].value_counts())
+
+# Review length in words
+review_word_counts = df["review"].str.split().apply(len)
+print("Review length in words:")
+print("   min:   ", review_word_counts.min())
+print("   median:", int(review_word_counts.median()))
+print("   mean:  ", round(review_word_counts.mean(), 1))
+print("   max:   ", review_word_counts.max())
+
+
 # Initialize tools
 lemmatizer = WordNetLemmatizer()
 
@@ -95,6 +122,10 @@ def preprocess_text(text):
     ]
 
     return " ".join(words)
+
+# Remove duplicate reviews
+df = df.drop_duplicates(subset="review").reset_index(drop=True)
+print("Reviews after removing duplicates:", len(df))
 
 # Apply preprocessing
 df["review"] = df["review"].apply(preprocess_text)
