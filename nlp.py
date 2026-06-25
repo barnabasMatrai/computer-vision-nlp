@@ -406,7 +406,8 @@ class SentimentLSTM(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         # the output layer takes the final LSTM memory and produces one number
-        # if it's >= 0 we say positive, if it's < 0 we say negative
+        # sigmoid converts it to a probability between 0 and 1
+        # if it's >= 0.5 we say positive, if it's < 0.5 we say negative
         self.output_layer = nn.Linear(hidden_size, 1)
 
     def _init_forget_gate_bias(self, num_layers):
@@ -435,6 +436,7 @@ class SentimentLSTM(nn.Module):
 
         # the output layer gives one number per review, squeeze removes the extra empty dimension
         output = self.output_layer(last_hidden)
+        output = torch.sigmoid(output)
         output = output.squeeze(1)
 
         return output
@@ -543,7 +545,7 @@ def train_one_epoch(model, train_loader, criterion, optimizer, device):
 
         # Track loss and correct predictions
         total_loss = total_loss + loss.item()
-        predicted_labels = (predictions >= 0.0).float()
+        predicted_labels = (predictions >= 0.5).float()
         correct = correct + (predicted_labels == batch_labels).sum().item()
         total_samples = total_samples + len(batch_labels)
 
@@ -574,7 +576,7 @@ def evaluate_model(model, test_loader, criterion, device):
             loss = criterion(predictions, batch_labels)
 
             total_loss = total_loss + loss.item()
-            predicted_labels = (predictions >= 0.0).float()
+            predicted_labels = (predictions >= 0.5).float()
             correct = correct + (predicted_labels == batch_labels).sum().item()
             total_samples = total_samples + len(batch_labels)
 
@@ -587,7 +589,7 @@ def evaluate_model(model, test_loader, criterion, device):
 def run_training(model, train_loader, test_loader, criterion, optimizer, device):
 
     NUM_EPOCHS = 50     # we allow up to 50 epochs but early stopping usually stops us before that
-    PATIENCE   = 3      # if accuracy doesn't improve for 3 epochs in a row we stop
+    PATIENCE   = 3      # if test accuracy doesn't improve for 3 epochs in a row we stop
     MIN_DELTA  = 0.001  # we only count it as improvement if accuracy goes up by at least 0.1%
 
     # instead of keeping the same learning rate the whole time, we let the scheduler shrink it
@@ -702,10 +704,8 @@ for combination in selected_combinations:
     )
     model = model.to(device)
 
-    # BCEWithLogitsLoss works for binary classification (positive or negative)
-    # it applies sigmoid and cross-entropy loss together in one step
-    # doing them separately can cause numerical problems, so this is the safer way
-    criterion = nn.BCEWithLogitsLoss()
+    # BCELoss works with probabilities, so we apply sigmoid in the model before this
+    criterion = nn.BCELoss()
 
     # Adam is a standard optimizer that works well for most neural networks
     # it adjusts the learning rate for each weight separately, which makes it faster to converge
@@ -795,8 +795,8 @@ with torch.no_grad():
         batch_labels = batch_labels.to(device)
 
         predictions = best_lstm_model(batch_sequences)
-        # >= 0 means positive, < 0 means negative
-        predicted_labels = (predictions >= 0.0).float()
+        # >= 0.5 means positive, < 0.5 means negative
+        predicted_labels = (predictions >= 0.5).float()
 
         lstm_all_preds.extend(predicted_labels.cpu().tolist())
         lstm_all_labels.extend(batch_labels.cpu().tolist())
